@@ -1,3 +1,4 @@
+const {spawn} = require("child_process");
 const {
     isMainThread, 
     workerData, 
@@ -6,20 +7,25 @@ const {
 
   if (!isMainThread) {
     const query = workerData.query;
-    const runRagAI = spawn('python', ['rag_ai.py', query]);
+    const path = require('path');
+    const scriptPath = path.resolve(__dirname, '../rag_ai.py');
+
+    const runRagAI = spawn('python', [scriptPath, query]);
 
     let finalOutput = "";
 
     runRagAI.stdout.on('data', (data) => {
         finalOutput = data;
+        runRagAI.kill();
     });
 
-    runRagAI.stderr.on('data', (data) => {
+    runRagAI.stderr.on('error', (data) => {
         throw new Error(`Error: ${data}`);
     });
 
     runRagAI.on("close",(code)=>{
         if(code === 0){
+            console.log(finalOutput);
             data = JSON.parse(finalOutput);
             parentPort.postMessage(data);
         }

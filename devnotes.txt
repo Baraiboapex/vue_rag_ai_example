@@ -1,0 +1,56 @@
+Lessons learned:
+----------------------------------------------
+to get gpu mode to work for an AI:
+
+1.) Create and activate a new conda environment
+conda create --name [env name here] python=3.11 -y 
+conda env list 
+(find env name to activate)
+conda activate [env name here]
+
+2.)Install torch via conda:
+conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia -y
+(if you have clobber errors, overwrite with this command)
+conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia -y --clobber
+(worse case scenario with cache corruption)
+conda deactivate
+conda env remove --name rag_env
+conda clean --all
+conda create --name rag_env python=3.11 -y
+conda activate rag_env
+conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia -y --clobber
+conda install -c conda-forge faiss-gpu
+pip install transformers
+pip install accelerate
+pip install langchain langchain_community
+pip install pypdf
+(set transformers to run in gpu mode with "cuda:0" like this:
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name, 
+        torch_dtype=torch.bfloat16, 
+        device_map=f"cuda:{gpu_index}"
+    )
+)
+(done!)
+
+Current project tasks.
+--------------------------------------------------------
+1.) Convert the API into a socket.io server. ==> Done.
+
+Other project ideas:
+---------------------------------------------------------
+2.) AI chatbot for my website using a rag.ai ==> Next project.
+
+3.) Code database that uses a recommendation system to figure out the best code 
+you can use based off of what you typed in and previous data. The cold start problem 
+can be solved by using the code from your github repository.
+
+4.) tides predictor AI using a GRU or LSTM model. (Add to jax tides app.) 
+
+5.) A facial recognition demonstration app.
+
+6.) something involving machine learning would be cool ==> Think about this.
+
+7.) A rag AI for multiple documents, or something.
+
+8.) A text reader AI that can be configured to look for specific tokens defined in a document.

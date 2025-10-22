@@ -1,9 +1,5 @@
 
-# Use an official NVIDIA CUDA image as the base.
-# 'cudacores-11.8.0-runtime-ubuntu22.04' is a good, lightweight choice.
-# The `runtime` images are smaller and contain only the necessary libraries for running CUDA applications.
-# The `devel` images include the CUDA toolkit for compiling. Use the `devel` image if you need to build CUDA-enabled code.
-FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04 AS python_cuda
+FROM ubuntu:22.04 AS python_build
 
 # Stage 1: Build the Python environment
 # Use a Node.js base image that has build tools for both languages
@@ -12,12 +8,36 @@ FROM node:18-bullseye-slim AS build
 # Set the working directory for the Python script
 WORKDIR /app/python_scripts
 
-# Install Python and Pip
-RUN apt-get update && apt-get install -y python3 python3-pip
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    curl wget build-essential zlib1g-dev libncurses5-dev libgdbm-dev \
+    libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev \
+    libbz2-dev liblzma-dev uuid-dev libdb-dev libexpat1-dev \
+    libmpdec-dev libgmp-dev libxext-dev libxrender-dev libx11-dev \
+    libgl1-mesa-dev libglx-dev libegl1-mesa-dev libtiff-dev \
+    libjpeg-dev libopenjp2-7-dev libwebp-dev libharfbuzz-dev \
+    libfribidi-dev libxcb1-dev && \
+    wget https://www.python.org/ftp/python/3.12.2/Python-3.12.2.tgz && \
+    tar -xf Python-3.12.2.tgz && \
+    cd Python-3.12.2 && \
+    ./configure --enable-optimizations && \
+    make -j$(nproc) && \
+    make altinstall
 
-# Copy Python requirements and install
-COPY ./python_scripts/requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+# Set Python 3.12 as default
+RUN ln -sf /usr/local/bin/python3.12 /usr/bin/python3 && \
+    python3 -m ensurepip && \
+    python3 -m pip install --upgrade pip setuptools wheel
+
+RUN /usr/local/bin/python3.12 -m ensurepip && \
+    /usr/local/bin/python3.12 -m pip install --upgrade pip setuptools wheel
+
+COPY requirements.txt .
+RUN /usr/local/bin/python3.12 -m pip install --no-cache-dir -r requirements.txt
+
+WORKDIR /app/python_scripts
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Stage 2: Build the Node.js application
 FROM node:18-bullseye-slim AS final
@@ -32,6 +52,7 @@ RUN npm install --production
 # Copy the Node.js API and the Python scripts from the build stage
 COPY . .
 COPY --from=build /app/python_scripts /app/python_scripts
+RUN find /app/python_scripts -type l ! -exec test -e {} \; -print
 
 # Expose the port your Node.js API listens on
 EXPOSE 3000
