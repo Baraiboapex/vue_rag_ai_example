@@ -12,8 +12,9 @@ function attatchResponseListeners(socketId){
         if (!runRagAI) return;
         runRagAI.stdout.on('data', (data) => {
             const lines = data.toString().split('\n');
-
-            const socketId = Array.from(currentQueries.keys())[0];
+            const currentSocketId = Array.from(currentQueries.keys())[0];
+            console.log(`CURRENT SOCKET ID => ${currentSocketId}`);
+            const socketId = currentSocketId;
             const socket = currentQueries.get(socketId);
             const eofStreamTag = "<<END_OF_STREAM>>";
             
@@ -74,11 +75,17 @@ function createRagAiChat(io){
 
                     console.log("MESSAGE LOADED");
                 });
+
+                socket.on('disconnect', () => {
+                    console.log("client disconnected");
+                    currentQueries.delete(socket.id)
+                });
             });
             
             ragAiChat.on("close_rag_ai",()=>{
-                activeQueries.delete(socket.id);
+                currentQueries.delete(socket.id);
             });
+           
         }else{
             throw new Error("Chat not ready yet.");
         }

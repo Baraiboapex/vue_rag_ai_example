@@ -123,9 +123,6 @@ def run_rag_ai(query):
 
         )
         
-        # --- RAG execution and Prompt Construction (synchronous) ---
-        
-        # 0. Check for relevant documents *before* retrieval for efficiency (if necessary, otherwise skip)
         located_docs = vectorstore.as_retriever(
             search_type="similarity_score_threshold",
             search_kwargs={"score_threshold": 0.2, "k": 5},
@@ -134,7 +131,6 @@ def run_rag_ai(query):
         has_relevant_document = len(located_docs) > 0
 
         if not has_relevant_document:
-            # If no relevant context is found, output the canned response.
             sys.stdout.write("I'm sorry, I don't have an answer for that.\n")
             sys.stdout.write("<<END_OF_STREAM>>\n")
             sys.stdout.flush()
