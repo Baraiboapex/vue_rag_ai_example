@@ -63,13 +63,22 @@ class WorkerPool extends EventEmitter {
           workerData:(workerData !== undefined ? workerData : undefined)
       });
       worker.on('message', (result) => {
-        // In case of success: Call the callback that was passed to `runTask`,
-        // remove the `TaskInfo` associated with the Worker, and mark it as free
-        // again.
-        worker[kTaskInfo].done(null, result);
-        worker[kTaskInfo] = null;
-        this.freeWorkers.push(worker);
-        this.emit(kWorkerFreedEvent);
+        const taskInfo = worker[kTaskInfo];
+
+        if (!taskInfo) {
+          this.emit("No task info!");
+          return;
+        }
+
+        if (message && message.type === "end") {
+          taskInfo.done(null, null); 
+
+          worker[kTaskInfo] = null;
+          this.freeWorkers.push(worker);
+          this.emit(kWorkerFreedEvent);
+        }else{
+          this.emit("done");
+        }
       });
       worker.on('error', (err) => {
         // In case of an uncaught exception: Call the callback that was passed to

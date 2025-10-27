@@ -1,37 +1,42 @@
 import sys
 import os
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, AutoConfig, pipeline
-from langchain_community.llms import HuggingFacePipeline
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, TextIteratorStreamer, pipeline
+from langchain_community.llms import HuggingFacePipeline # Kept for warning suppression, but not used in streaming
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.prompts import PromptTemplate
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_classic.chains import RetrievalQA
 from langchain_community.vectorstores.faiss import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.runnables import RunnablePassthrough
+from operator import itemgetter
+import threading
+import logging
+import traceback
+import gc
 
-# Set environment variables
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+logging.basicConfig(level=logging.WARNING)
 
-# TinyLlama has a max context of 2048 tokens. We use this to cap the input/output.
 MODEL_MAX_LENGTH = 2048 
-DEFAULT_K_DOCUMENTS = 3 # Number of document chunks to retrieve
+DEFAULT_K_DOCUMENTS = 3
 
 def use_gpu(gpu_index):
-    """Initializes the model and tokenizer for GPU using 4-bit quantization (bnb)."""
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
         bnb_4bit_compute_dtype=torch.float16,
         bnb_4bit_use_double_quant=True,
     )
-    model_name = "mistralai/Mistral-7B-Instruct-v0.2"
+    model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     
-    # Explicitly set model_max_length here to align with the model's capability
     tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=MODEL_MAX_LENGTH)
     
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         quantization_config=bnb_config,
@@ -42,54 +47,46 @@ def use_gpu(gpu_index):
     return model, tokenizer
 
 def use_cpu():
-    """Initializes the model and tokenizer for CPU without quantization."""
-    model_name = "mistralai/Mistral-7B-Instruct-v0.2"
+    model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=MODEL_MAX_LENGTH)
+    
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        
     model = AutoModelForCausalLM.from_pretrained(model_name)
     return model, tokenizer
 
-def main():
+def run_rag_ai(query):
     try:
         model = None
         tokenizer = None
-
         file_dir = os.path.dirname(os.path.abspath(__file__))
-        # NOTE: Ensure 'SampleContract-Shuttle.pdf' exists in the same directory
         file_path = os.path.join(file_dir, "SampleContract-Shuttle.pdf")
-        
         loader = PyPDFLoader(file_path)
-        documents = loader.load() 
+        documents = loader.load()
 
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1024,      # Target size for each chunk (in characters)
-            chunk_overlap=100     # Overlap to maintain context between chunks
+            chunk_size=1024,     
+            chunk_overlap=100 
         )
         
         split_documents = text_splitter.split_documents(documents)
         
         cuda_is_available = torch.cuda.is_available()
-        print(f"Cuda version needed : {cuda_is_available} {torch.version.cuda}")
+        device = torch.device("cpu") 
+        
         if cuda_is_available:
-            print("CUDA available")
             model, tokenizer = use_gpu(gpu_index=0)
+            device = next(model.parameters()).device 
+            if hasattr(tokenizer, 'device') and tokenizer.device != device:
+                tokenizer.device = device
+            elif hasattr(tokenizer, 'to'):
+                tokenizer.to(device)
         else:
             model, tokenizer = use_cpu()
 
-        # Define the generation pipeline
-        generator = pipeline(
-            "text-generation",
-            model=model, 
-            tokenizer=tokenizer, 
-            max_new_tokens=300,# Max tokens the LLM will *generate* (the response length)
-            temperature=0.4, 
-            top_p=0.9,
-            do_sample=True,
-            # Ensure the pipeline respects the model's context limit during input handling
-            truncation=False,
-            max_length=MODEL_MAX_LENGTH
-        )
-
-        llm = HuggingFacePipeline(pipeline=generator)
+        streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+        
         embeddings = HuggingFaceEmbeddings(
             model_name="all-MiniLM-L6-v2", 
             model_kwargs={"device": "cuda" if cuda_is_available else "cpu"},
@@ -100,19 +97,18 @@ def main():
         )
         vectorstore = FAISS.from_documents(split_documents, embeddings)
 
-        # --- FIX APPLIED HERE ---
-        # We explicitly configure the retriever to only fetch 3 document chunks (k=3).
-        # This prevents stuffing too much context into the prompt, keeping the total
-        # token count below the 2048 limit.
         retriever = vectorstore.as_retriever(search_kwargs={"k": DEFAULT_K_DOCUMENTS})
-
-        print("Building your response...")
+        
+        # --- LangChain RAG Setup ---
+        context_retriever_chain = itemgetter("question") | retriever
         
         prompt_template = PromptTemplate(
             input_variables=["context", "question"],
             template = """
         ### Instruction:
-        You are a helpful legal assistant. Use the context below to answer the question clearly and concisely.
+        You are a helpful legal assistant. You have provided the user with a contract that they must review to do business with the company you represent. 
+        It is your job to answer questions the user poses about their contract in a clear and concise way to limit any further questions
+        about the user's proposed query. Use the context below to answer the question clearly and concisely.
         Only answer questions based on the provided context. If the context does not contain the answer,
         say "I'm sorry, I don't have an answer for that." Do not generate jokes, response examples, or question examples. 
         Stay strictly within legal and contractual language. DO NOT OUTPUT EXAMPLE QUESTIONS AND ANSWERS.
@@ -126,36 +122,103 @@ def main():
         ###Answer:"""
 
         )
-
-        rag_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            retriever=retriever,
-            chain_type_kwargs={"prompt": prompt_template} 
-        )
-
-        # We use a separate retriever call here to check for relevance, 
-        # but the main RAG chain above uses the limited 'retriever' object.
-        query = "How should the consultant handle billing?"
         
+        # --- RAG execution and Prompt Construction (synchronous) ---
+        
+        # 0. Check for relevant documents *before* retrieval for efficiency (if necessary, otherwise skip)
         located_docs = vectorstore.as_retriever(
             search_type="similarity_score_threshold",
-            search_kwargs={"score_threshold": 0.2, "k": 5}, # k=5 is fine here since it's just for the check
+            search_kwargs={"score_threshold": 0.2, "k": 5},
         ).invoke(query)
-
+        
         has_relevant_document = len(located_docs) > 0
 
-        print("Now generating response!")
+        if not has_relevant_document:
+            # If no relevant context is found, output the canned response.
+            sys.stdout.write("I'm sorry, I don't have an answer for that.\n")
+            sys.stdout.write("<<END_OF_STREAM>>\n")
+            sys.stdout.flush()
+            return
 
-        if has_relevant_document:
-            print(query)
-            result = rag_chain.invoke(query) # Changed to .invoke for modern LangChain syntax
-            valid_answer_string = f"""{{"response":"Answer: {result['result']}\"}}"""
-            print(valid_answer_string)
-        else:
-            invalid_answer_string = f"""{{"response":"Answer: I'm sorry, I don't have an answer for that.\"}}"""
-            print(invalid_answer_string)
+        context_docs = context_retriever_chain.invoke({"question": query})
+
+        final_prompt_dict = {
+            "context": context_docs,
+            "question": query.strip() # Use the stripped query here
+        }
+
+        final_prompt_text = prompt_template.format(**final_prompt_dict)
+
+        generation_started_event = threading.Event()
+
+        def generate_with_streamer(prompt, event):
+            inputs = tokenizer(prompt, return_tensors="pt", truncation=False)
+            input_ids = inputs.input_ids
+            attention_mask = inputs.attention_mask
+
+            input_ids = input_ids.to(device) 
+            attention_mask = attention_mask.to(device)
+
+            event.set()
+
+            model.generate(
+                input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=1000,
+                temperature=0.65,
+                do_sample=True,
+                streamer=streamer,
+                pad_token_id=tokenizer.eos_token_id, 
+            )
+
+        thread = threading.Thread(target=generate_with_streamer, args=(final_prompt_text, generation_started_event,))
+        thread.start()
+
+        generation_started_event.wait() 
+        
+        for chunk in streamer: 
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+            
+        thread.join()
+
+        sys.stdout.write("<<END_OF_STREAM>>\n")
+        sys.stdout.flush()
+            
     except Exception as err:
-        print("Something got messed up!!! : ", err)
+        sys.stderr.write("!!! PYTHON SCRIPT FAILED !!!\n")
+        sys.stderr.write(f"Error: {err}\n")
+        sys.stderr.write("Traceback:\n")
+        sys.stderr.write(traceback.format_exc())
+        sys.stderr.flush()
+
+def clean_memory_states():
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+def main(): 
+    clean_memory_states()
+    while True:
+        try:
+            query = sys.stdin.readline()
+            
+            if not query:
+                break
+            
+            query = query.strip()
+            
+            if len(query) > 0:
+                print(f'Processing query: "{query}"', file=sys.stderr)
+                run_rag_ai(query)
+            
+        except RuntimeError as err:
+            sys.stderr.write(f"Runtime Error: {err}\n")
+            sys.stderr.flush()
+        except KeyboardInterrupt:
+            break
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(line_buffering=True) 
+    sys.stderr.reconfigure(line_buffering=True)
     main()

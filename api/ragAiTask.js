@@ -6,28 +6,44 @@ const {
   } = require('node:worker_threads');
 
   if (!isMainThread) {
-    const query = workerData.query;
-    const path = require('path');
-    const scriptPath = path.resolve(__dirname, '../rag_ai.py');
+    try{
+        console.log("STARTING PYTHON BACKGROUND PROCESS...");
 
-    const runRagAI = spawn('python', [scriptPath, query]);
+        const query = workerData.query;
+        console.log("QUERY : ", query);
+        const path = require('path');
+        const scriptPath = path.resolve(__dirname, '../rag_ai.py');
 
-    let finalOutput = "";
+        console.log("FOUND PYTHON SCRIPT : ", scriptPath);
 
-    runRagAI.stdout.on('data', (data) => {
-        finalOutput = data;
-        runRagAI.kill();
-    });
+        const runRagAI = spawn('python', [scriptPath/*, query*/]);
 
-    runRagAI.stderr.on('error', (data) => {
-        throw new Error(`Error: ${data}`);
-    });
+        runRagAI.stdout.on('data', (data) => {
+            const rawData = data.toString();
+            const chunks = rawData.split('\n').filter(Boolean); 
 
-    runRagAI.on("close",(code)=>{
-        if(code === 0){
-            console.log(finalOutput);
-            data = JSON.parse(finalOutput);
-            parentPort.postMessage(data);
-        }
-    });
+            for (const chunk of chunks) {
+                if (chunk === "<<END_OF_STREAM>>") {
+                    parentPort.postMessage({ type: 'end' });
+                    return;
+                }
+
+                parentPort.postMessage({ type: 'token', content: chunk });
+            }
+        });
+
+        runRagAI.stderr.on('error', (data) => {
+            console.log(`Error in RAG AI : ${data}`);
+            // runRagAI.kill();
+            throw new Error(`Error: ${data}`);
+        });
+
+        runRagAI.on("close",(code)=>{
+            console.log("CODE : ", code);
+            console.log("PROCESS CLOSED");
+        });
+
+    } catch(err){
+        console.log("PROCESS ERROR : ",err);
+    }
   }
