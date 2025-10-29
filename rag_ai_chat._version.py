@@ -16,50 +16,197 @@ import traceback
 import gc
 import re
 
+from transformers import StoppingCriteria, StoppingCriteriaList
+import torch
+
+class DynamicStopPhraseCriteria(StoppingCriteria):
+    def __init__(self, stop_phrases: list[str], tokenizer, device):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.stop_token_ids = []
+        
+        # Tokenize all potential stop phrases dynamically
+        for phrase in stop_phrases:
+            # We get the token IDs for the phrase and move them to the GPU
+            # We use `add_special_tokens=False` to ensure clean tokenization
+            token_ids = tokenizer.encode(phrase, add_special_tokens=False, return_tensors='pt')[0].to(device)
+            self.stop_token_ids.append(token_ids)
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+        
+        # Iterate through all dynamically set stop sequences
+        for stop_ids in self.stop_token_ids:
+            stop_len = len(stop_ids)
+            
+            # Check if the generated sequence (input_ids) is long enough to contain this phrase
+            if input_ids.shape[-1] >= stop_len:
+                last_tokens = input_ids[0, -stop_len:]
+                
+                # Check for a match
+                if torch.equal(last_tokens, stop_ids):
+                    return True # Stop generation
+                    
+        return False # Continue generation
+
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 logging.basicConfig(level=logging.WARNING)
 
-MODEL_MAX_LENGTH = 2048 
+MODEL_MAX_LENGTH = 768 
 DEFAULT_K_DOCUMENTS = 3
+CHATML_TEMPLATE = [
+    # 1. System Role: Takes your entire '### Instruction' section
+    {
+        "role": "system",
+        "content": (
+            "You are a helpful and expert legal assistant. Your task is to analyze the contract provided in the Context section and answer the user's Question. "
+            "Answer the question clearly and concisely using ONLY the provided context. Do not use external knowledge or make inferences. "
+            "***GROUNDING INSTRUCTION:*** Before providing any answer, first determine if the relevant information is explicitly present in the Context. "
+            "If the Context states that the information is in an Exhibit (e.g., Exhibit A, Exhibit B) OR if the required information is left blank (e.g., \"$_____\", \"(DATE)\"), you **MUST** respond with the following EXACT phrase, and NOTHING ELSE: \"I'm sorry, I don't have an answer for that.\" DO NOT output this phrase more than once, and DO NOT generate anything else other than this phrase." 
+            "For all other questions, provide a clear, concise answer. Maintain a strictly professional, legal, and contractual tone. Do not generate jokes, response examples, or conversational fillers. "
+            "Output must use strictly standard ASCII characters. For example, do not use \"’\" but instead use \"'\"."
+        )
+    },
+    # 2. User Role: Uses the placeholders
+    {
+        "role": "user",
+        "content": "Context: \n{context}\n\nQuestion: {question}"
+    }
+]
 
-def use_gpu(gpu_index):
-    """_summary_
-    
-        Although the tiny llama model that I am using is alredy quite performant, I wanted to use as much optimization as possible
-        in order to compensate for my limited GPU that I was using at the time (6 GB of v-ram).
+def load_llm_resources(model_name):
     """
-    
-    model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-    
-    tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=MODEL_MAX_LENGTH)
-    
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    Loads the LLM, Tokenizer, and sets up quantization/PEFT once at startup.
+    This function replaces the previous use_gpu/use_cpu calls.
+    """
+    global LLM_MODEL, LLM_TOKENIZER, LLM_DEVICE
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        dtype=torch.bfloat16, #Using 16 bit floats to have SOME balance of accuracy/speed ratio
-        device_map=f"cuda:{gpu_index}",
-        low_cpu_mem_usage=True, #Went ahead and limited cpu memory usage to get as much data over to the GPU as possible
-    )
-    return model, tokenizer
-
-def use_cpu():
-    model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-    tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=MODEL_MAX_LENGTH)
+    cuda_is_available = torch.cuda.is_available()
+    LLM_DEVICE = torch.device("cuda:0" if cuda_is_available else "cpu")
     
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    try:
+        if cuda_is_available:
+            print("INFO::Attempting to load model using 4-bit quantization and device offloading.")
+            
+            compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4", 
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_compute_dtype=compute_dtype 
+            )
+            
+            LLM_TOKENIZER = AutoTokenizer.from_pretrained(model_name)
+            
+            # CRITICAL FIX RE-APPLIED: Use device_map="auto" to enable memory offloading.
+            # This is essential for 6GB VRAM cards with large models like Phi-3-128k.
+            LLM_MODEL = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                torch_dtype=compute_dtype,
+                device_map={'': 0}, # <-- FIX: Use 'auto' instead of explicit 'cuda:X'
+                quantization_config=bnb_config,
+                low_cpu_mem_usage=True, 
+                trust_remote_code=True
+            )
+            
+            LLM_MODEL = prepare_model_for_kbit_training(LLM_MODEL)
+            
+            lora_config = LoraConfig(
+                r=16,
+                lora_alpha=32,
+                target_modules=["qkv_proj", "o_proj"],
+                lora_dropout=0.05, 
+                bias="none", 
+                task_type="CAUSAL_LM"
+            )
+            
+            LLM_MODEL = get_peft_model(LLM_MODEL, lora_config)
+            
+            # Ensure the use_cache fix is applied to the config 
+            if getattr(LLM_MODEL.config, "use_cache", False):
+                LLM_MODEL.config.use_cache = False
+            
+        else:
+            print("WARNING::CUDA not available. Loading model on CPU (inference will be slow).")
+            LLM_TOKENIZER = AutoTokenizer.from_pretrained(model_name)
+            LLM_MODEL = AutoModelForCausalLM.from_pretrained(model_name)
+            
+        if LLM_TOKENIZER.pad_token is None:
+            LLM_TOKENIZER.pad_token = LLM_TOKENIZER.eos_token
+            
+        print(f"INFO::Model loading complete. Model device map: {getattr(LLM_MODEL, 'hf_device_map', LLM_DEVICE)}")
         
-    model = AutoModelForCausalLM.from_pretrained(model_name)
-    return model, tokenizer
+    except Exception as e:
+        sys.stderr.write(f"CRITICAL ERROR::Model Loading Failed: {e}\n")
+        sys.stderr.write(traceback.format_exc())
+        sys.stderr.flush()
+        # Set to None if failure occurs
+        LLM_MODEL = None
+        LLM_TOKENIZER = None
+
+def generate_with_streamer(messages, device, tokenizer, model, streamer, event):
+    """
+    Handles tokenization in the correct ChatML format and streams the model's output.
+    """
+    try:
+        input_text = tokenizer.apply_chat_template(
+            messages, 
+            tokenize=False,
+            add_generation_prompt=True 
+        )
+
+        inputs = tokenizer(
+            input_text, 
+            return_tensors="pt"
+        )
+        
+        # Inputs must be moved to the model's primary device(s)
+        input_ids = inputs.input_ids.to(model.device) 
+        attention_mask = inputs.attention_mask.to(model.device)
+
+        event.set()
+
+        stop_token_ids = tokenizer.encode(STOP_PHRASE, return_tensors='pt')[0]
+        # Ensure custom stop criteria tokens are on the correct device
+        custom_stop = StopAfterPhraseCriteria(stop_token_ids.to(model.device))
+        stopping_criteria = StoppingCriteriaList([custom_stop])
+        
+        model.generate(
+            input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=512,
+            temperature=0.65,
+            top_p=0.9,
+            do_sample=True,
+            streamer=streamer,
+            eos_token_id=tokenizer.eos_token_id, 
+            pad_token_id=tokenizer.pad_token_id,
+            stopping_criteria=stopping_criteria,
+            repetition_penalty=1.1
+        )
+    except Exception as e:
+        sys.stderr.write(f"!!! GENERATION FAILED !!!\nError in generate_with_streamer: {e}\n")
+        sys.stderr.write(traceback.format_exc())
+        sys.stderr.flush()
 
 def run_rag_ai(query, session_id, user_id):
+    """
+    The main RAG execution function. Now only initializes RAG components and
+    uses the globally loaded LLM.
+    """
+    global LLM_MODEL, LLM_TOKENIZER, LLM_DEVICE
+    
+    if LLM_MODEL is None or LLM_TOKENIZER is None:
+        sys.stderr.write(f"ERROR::{user_id}--{session_id}::LLM Model not successfully loaded during startup. Aborting query.\n")
+        sys.stderr.flush()
+        return
+    
     try:
-        model = None
-        tokenizer = None
+        # NOTE: RAG components (loaders, splitter, embeddings, vectorstore) 
+        # are currently loaded/initialized on every call, which will still add latency.
+        
         file_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(file_dir, "SampleContract-Shuttle.pdf")
         loader = PyPDFLoader(file_path)
@@ -67,25 +214,13 @@ def run_rag_ai(query, session_id, user_id):
 
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1024,     
-            chunk_overlap=100 
+            chunk_overlap=256 
         )
         
         split_documents = text_splitter.split_documents(documents)
         
         cuda_is_available = torch.cuda.is_available()
-        device = torch.device("cpu") 
-        
-        if cuda_is_available:
-            model, tokenizer = use_gpu(gpu_index=0)
-            device = next(model.parameters()).device 
-            if hasattr(tokenizer, 'device') and tokenizer.device != device:
-                tokenizer.device = device
-            elif hasattr(tokenizer, 'to'):
-                tokenizer.to(device)
-        else:
-            model, tokenizer = use_cpu()
-
-        streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+        # Device is now determined globally upon startup: LLM_DEVICE
         
         embeddings = HuggingFaceEmbeddings(
             model_name="all-MiniLM-L6-v2", 
@@ -99,81 +234,53 @@ def run_rag_ai(query, session_id, user_id):
 
         retriever = vectorstore.as_retriever(search_kwargs={"k": DEFAULT_K_DOCUMENTS})
         
-        # --- LangChain RAG Setup ---
         context_retriever_chain = itemgetter("question") | retriever
-        
-        prompt_template = PromptTemplate(
-            input_variables=["context", "question"],
-            template = """
-        ### Instruction:
-        You are a helpful legal assistant. You have provided the user with a contract that they must review to do business with the company you represent. 
-        It is your job to answer questions the user poses about their contract in a clear and concise way to limit any further questions
-        about the user's proposed query. Use the context below to answer the question clearly and concisely.
-        Only answer questions based on the provided context. If the context does not contain the answer,
-        say "I'm sorry, I don't have an answer for that." Do not generate jokes, response examples, or question examples. 
-        Stay strictly within legal and contractual language. DO NOT OUTPUT EXAMPLE QUESTIONS AND ANSWERS.
 
-        ### Context:
-        {context}
-
-        ### Question:
-        {question}
-
-        ###Answer:"""
-
-        )
-        
         located_docs = vectorstore.as_retriever(
             search_type="similarity_score_threshold",
-            search_kwargs={"score_threshold": 0.2, "k": 5},
+            search_kwargs={"score_threshold": 0.4, "k": 5},
         ).invoke(query)
         
         has_relevant_document = len(located_docs) > 0
 
         if not has_relevant_document:
-            sys.stdout.write("I'm sorry, I don't have an answer for that.\n")
-            sys.stdout.write("<<END_OF_STREAM>>\n")
+            # Added session/user ID to output for logging clarity on the pipe
+            sys.stdout.write(f"RESPONSE::{user_id}--{session_id}::{STOP_PHRASE}\n") 
             sys.stdout.flush()
             return
-
+        
         context_docs = context_retriever_chain.invoke({"question": query})
-
-        final_prompt_dict = {
-            "context": context_docs,
-            "question": query.strip() # Use the stripped query here
-        }
-
-        final_prompt_text = prompt_template.format(**final_prompt_dict)
-
+        
+        actual_context_text = "\n\n".join([d.page_content for d in context_docs])
+        final_messages = [
+            CHATML_TEMPLATE[0],
+            {
+                "role": "user",
+                "content": CHATML_TEMPLATE[1]['content'].format(
+                    context=actual_context_text, 
+                    question=query.strip()
+                )
+            }
+        ]
+        
+        streamer = TextIteratorStreamer(LLM_TOKENIZER, skip_prompt=True, skip_special_tokens=True)
         generation_started_event = threading.Event()
 
-        def generate_with_streamer(prompt, event):
-            inputs = tokenizer(prompt, return_tensors="pt", truncation=False)
-            input_ids = inputs.input_ids
-            attention_mask = inputs.attention_mask
-
-            input_ids = input_ids.to(device) 
-            attention_mask = attention_mask.to(device)
-
-            event.set()
-
-            model.generate(
-                input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=1000,
-                temperature=0.65,
-                do_sample=True,
-                streamer=streamer,
-                pad_token_id=tokenizer.eos_token_id, 
-            )
-
-        thread = threading.Thread(target=generate_with_streamer, args=(final_prompt_text, generation_started_event,))
+        thread = threading.Thread(
+            target=generate_with_streamer, 
+            args=(final_messages, LLM_DEVICE, LLM_TOKENIZER, LLM_MODEL, streamer, generation_started_event,)
+        )
         thread.start()
+        
+        # Start streaming the response output
+        sys.stdout.write(f"RESPONSE::{user_id}--{session_id}::")
+        sys.stdout.flush()
 
         generation_started_event.wait() 
         
         for chunk in streamer: 
-            sys.stdout.write(user_id+"--"+session_id + "::" + chunk)
+            # Write only the chunk data, as the prefix is already written
+            sys.stdout.write(chunk)
             sys.stdout.flush()
             
         thread.join()
@@ -189,39 +296,58 @@ def run_rag_ai(query, session_id, user_id):
         sys.stderr.flush()
 
 def clean_memory_states():
+    """
+    Clears CUDA cache and collects Python garbage. 
+    """
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-def main(): 
-    clean_memory_states()
+
+def main():
+    """
+    Initializes the model once and then enters a persistent loop
+    to handle queries via standard input (stdin).
+    """
+    # Load the model and tokenizer ONCE before the loop starts
+    load_llm_resources(model_name="microsoft/Phi-3-mini-128k-instruct") 
     
+    # Start the continuous query processing loop
     while True:
+        
         try:
             string_to_use = sys.stdin.readline()
-            query_string = string_to_use
             
-            #Continue to figure out how to get these variables to work for the RAG text
-            #So that the socket.io server can send the response back to the correct user's
-            #current tab.
-            query = re.search(r"(?<=::)(.*)", query_string).group()
-            user_id = re.search(r"(.*)(?=\-\-)", query_string).group()
-            session_id = re.search(r"(?<=\-\-)(.*)(?=::)", query_string).group()  
-            
-            if not query_string:
+            # Exit loop if standard input pipe is closed
+            if not string_to_use:
                 break
+                
+            query_string = string_to_use.strip()
             
-            query = string_to_use.strip()
+            # Parsing logic for query, user_id, and session_id
+            # Assuming format is: user_id--session_id::query
+            
+            match = re.search(r"(.*)\-\-(.*)::(.*)", query_string)
+            if not match:
+                sys.stderr.write(f"ERROR::Input format incorrect: {query_string}\n")
+                continue
+                
+            user_id, session_id, query = match.groups()
             
             if len(query) > 0:
-                print(f'Processing query: "{query}"', file=sys.stderr)
                 run_rag_ai(query, session_id, user_id)
+                
+            cleanup_thread = threading.Thread(target=clean_memory_states)
+            cleanup_thread.daemon = True 
+            cleanup_thread.start()
             
         except RuntimeError as err:
             sys.stderr.write(f"Runtime Error: {user_id}--{session_id}::{err}\n")
             sys.stderr.flush()
-        except KeyboardInterrupt:
-            break
+        except Exception as e:
+            sys.stderr.write(f"General Error: {user_id}--{session_id}::{e}\n")
+            sys.stderr.flush()
+
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(line_buffering=True) 
