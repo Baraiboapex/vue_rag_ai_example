@@ -1,0 +1,96 @@
+accelerate==1.11.0
+aiohappyeyeballs==2.6.1
+aiohttp==3.13.1
+aiosignal==1.4.0
+annotated-types==0.7.0
+anyio==4.11.0
+asgiref==3.8.1
+attrs==25.4.0
+bitsandbytes==0.48.1
+brotlicffi @ file:///C:/b/abs_f4lixvzmxt/croot/brotlicffi_1736183286104/work
+certifi @ file:///home/conda/feedstock_root/build_artifacts/certifi_1759648874697/work/certifi
+cffi @ file:///C:/miniconda3/conda-bld/cffi_1760098047237/work
+charset-normalizer @ file:///croot/charset-normalizer_1721748349566/work
+colorama==0.4.6
+dataclasses-json==0.6.7
+Django==5.2.1
+faiss==1.8.0
+filelock @ file:///C:/b/abs_758187j281/croot/filelock_1744281404850/work
+frozenlist==1.8.0
+fsspec==2025.9.0
+gmpy2 @ file:///C:/b/abs_d8ki0o0h97/croot/gmpy2_1738085498525/work
+greenlet==3.2.4
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+httpx-sse==0.4.3
+huggingface-hub==0.35.3
+idna @ file:///C:/b/abs_aad84bnnw5/croot/idna_1714398896795/work
+Jinja2 @ file:///C:/b/abs_920kup4e6u/croot/jinja2_1741711580669/work
+joblib==1.5.2
+jsonpatch==1.33
+jsonpointer==3.0.0
+langchain==1.0.2
+langchain-classic==1.0.0
+langchain-community==0.4
+langchain-core==1.0.0
+langchain-text-splitters==1.0.0
+langgraph==1.0.1
+langgraph-checkpoint==3.0.0
+langgraph-prebuilt==1.0.1
+langgraph-sdk==0.2.9
+langsmith==0.4.37
+MarkupSafe @ file:///C:/b/abs_a0ma7ge0jc/croot/markupsafe_1738584052792/work
+marshmallow==3.26.1
+mkl-service==2.4.0
+mkl_fft @ file:///C:/Users/dev-admin/mkl/mkl_fft_1730823082242/work
+mkl_random @ file:///C:/Users/dev-admin/mkl/mkl_random_1730822522280/work
+mpmath @ file:///C:/b/abs_7833jrbiox/croot/mpmath_1690848321154/work
+multidict==6.7.0
+mypy_extensions==1.1.0
+networkx @ file:///C:/b/abs_6c02vx1ct4/croot/networkx_1756709289161/work
+numpy @ file:///C:/b/abs_c1ywpu18ar/croot/numpy_and_numpy_base_1708638681471/work/dist/numpy-1.26.4-cp311-cp311-win_amd64.whl#sha256=5dfd3e04dc1c2826d3f404fdc7f93c097901f5da9b91f4f394f79d4e038ed81d
+orjson==3.11.3
+ormsgpack==1.11.0
+packaging @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_packaging_1745345660/work
+peft==0.17.1
+pillow @ file:///C:/b/abs_b50vowcrzo/croot/pillow_1738010273782/work
+propcache==0.4.1
+protobuf==6.33.0
+psutil==7.1.1
+pycparser @ file:///C:/miniconda3/conda-bld/pycparser_1757496060165/work
+pydantic==2.12.3
+pydantic-settings==2.11.0
+pydantic_core==2.41.4
+pypdf==6.1.3
+PySocks @ file:///C:/ci_311/pysocks_1676425991111/work
+python-dotenv==1.1.1
+PyYAML @ file:///C:/b/abs_14xkfs39bx/croot/pyyaml_1728657968772/work
+regex==2025.10.23
+requests @ file:///C:/b/abs_f53smfvswb/croot/requests_1756709376206/work
+requests-toolbelt==1.0.0
+safetensors==0.6.2
+scikit-learn==1.7.2
+scipy==1.16.2
+sentence-transformers==5.1.2
+sentencepiece==0.2.1
+sniffio==1.3.1
+SQLAlchemy==2.0.44
+sqlparse==0.5.3
+sympy==1.13.1
+tenacity==9.1.2
+threadpoolctl==3.6.0
+tokenizers==0.22.1
+torch==2.5.1
+torchaudio==2.5.1
+torchvision==0.20.1
+tqdm==4.67.1
+transformers==4.57.1
+typing-inspect==0.9.0
+typing-inspection==0.4.2
+typing_extensions @ file:///C:/b/abs_ecq8gc0vbm/croot/typing_extensions_1756281142218/work
+urllib3 @ file:///C:/b/abs_393g1ayee_/croot/urllib3_1750775481226/work
+win-inet-pton @ file:///C:/ci_311/win_inet_pton_1676425458225/work
+xxhash==3.6.0
+yarl==1.22.0
+zstandard==0.25.0
