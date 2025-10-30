@@ -97,7 +97,8 @@ def load_llm_resources(model_name):
                 device_map={'': 0}, # <-- FIX: Use 'auto' instead of explicit 'cuda:X'
                 quantization_config=bnb_config,
                 low_cpu_mem_usage=True, 
-                trust_remote_code=True
+                trust_remote_code=False,
+                attn_implementation='eager'
             )
             
             LLM_MODEL = prepare_model_for_kbit_training(LLM_MODEL)
@@ -234,7 +235,7 @@ def run_rag_ai(query, session_id, user_id):
 
         if not has_relevant_document:
             # Added session/user ID to output for logging clarity on the pipe
-            sys.stdout.write(f"RESPONSE::{user_id}--{session_id}::{STOP_PHRASE}\n") 
+            sys.stdout.write(f"{user_id}--{session_id}::{STOP_PHRASE}\n") 
             sys.stdout.flush()
             return
         
@@ -260,16 +261,11 @@ def run_rag_ai(query, session_id, user_id):
             args=(final_messages, LLM_DEVICE, LLM_TOKENIZER, LLM_MODEL, streamer, generation_started_event,)
         )
         thread.start()
-        
-        # Start streaming the response output
-        sys.stdout.write(f"RESPONSE::{user_id}--{session_id}::")
-        sys.stdout.flush()
-
         generation_started_event.wait() 
         
         for chunk in streamer: 
             # Write only the chunk data, as the prefix is already written
-            sys.stdout.write(chunk)
+            sys.stdout.write(f"{user_id}--{session_id}::{chunk}")
             sys.stdout.flush()
             
         thread.join()
@@ -331,10 +327,10 @@ def main():
             cleanup_thread.start()
             
         except RuntimeError as err:
-            sys.stderr.write(f"Runtime Error: {user_id}--{session_id}::{err}\n")
+            sys.stderr.write(f"{user_id}--{session_id}::{err}\n")
             sys.stderr.flush()
         except Exception as e:
-            sys.stderr.write(f"General Error: {user_id}--{session_id}::{e}\n")
+            sys.stderr.write(f"{user_id}--{session_id}::{e}\n")
             sys.stderr.flush()
 
 

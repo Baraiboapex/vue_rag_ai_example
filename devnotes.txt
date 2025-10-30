@@ -8,22 +8,27 @@ conda env list
 (find env name to activate)
 conda activate [env name here]
 
-2.)Install torch via conda:
-conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia -y
+2.)Install torch and other packages via conda and pip:
+conda create --name rag_env python=3.12 -y
+conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia -y
 (if you have clobber errors, overwrite with this command)
-conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia -y --clobber
+conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia -y --clobber
 (worse case scenario with cache corruption)
 conda deactivate
 conda env remove --name rag_env
 conda clean --all
-conda create --name rag_env python=3.11 -y
+conda create --name rag_env python=3.12 -y
 conda activate rag_env
-conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia -y --clobber
+conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia -y --clobber
 conda install -c conda-forge faiss-gpu
 pip install transformers
 pip install accelerate
 pip install langchain langchain_community
 pip install pypdf
+pip install peft
+pip install bitsandbytes>=0.43.0 --prefer-binary
+pip install sentence-transformers
+(run the rag_ai.py script so that it can load all its tensors from safetensors. With a fresh install, this can take a while.)
 (set transformers to run in gpu mode with "cuda:0" like this:
     model = AutoModelForCausalLM.from_pretrained(
         model_name, 
