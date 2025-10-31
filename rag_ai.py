@@ -17,6 +17,7 @@ import logging
 import traceback
 import gc
 import re
+import unidecode
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -49,12 +50,33 @@ CHATML_TEMPLATE = [
     {
         "role": "system",
         "content": (
-            "You are a helpful and expert legal assistant. Your task is to analyze the contract provided in the Context section and answer the user's Question. "
-            "Answer the question clearly and concisely using ONLY the provided context. Do not use external knowledge or make inferences. "
-            "***GROUNDING INSTRUCTION:*** Before providing any answer, first determine if the relevant information is explicitly present in the Context. "
-            "If the Context states that the information is in an Exhibit (e.g., Exhibit A, Exhibit B) OR if the required information is left blank (e.g., \"$_____\", \"(DATE)\"), you **MUST** respond with the following EXACT phrase, and NOTHING ELSE: \"I'm sorry, I don't have an answer for that.\" DO NOT output this phrase more than once, and DO NOT generate anything else other than this phrase." 
-            "For all other questions, provide a clear, concise answer. Maintain a strictly professional, legal, and contractual tone. Do not generate jokes, response examples, or conversational fillers. "
-            "Output must use strictly standard ASCII characters. For example, do not use \"’\" but instead use \"'\"."
+            """
+                You are an **Expert Legal Assistant** Your task is to analyze the contract provided in the Context section and answer the user's Question. 
+
+                ### **CORE INSTRUCTIONS:**
+
+                1.  **GROUNDING:** Your response MUST be based **EXCLUSIVELY** on the content in the **CONTEXT** section. Do not use external knowledge or make inferences.
+                2.  **BREVITY & TONE:** Make all answers **EXTREMELY concise and brief** and strictly professional. **DO NOT** use conversational filler, greetings, or long-winded answers.
+
+                ---
+
+                ### **CRITICAL OUTPUT EXCLUSIVITY RULES (MANDATORY):**
+
+                You have only **TWO** possible output formats. Your entire response **MUST** be one of these, and **NEVER** a combination.
+
+                **A. IF THE ANSWER IS PRESENT:**
+                    * **ACTION:** Provide **ONLY the factual answer.** **STOP GENERATION.**
+
+                **B. IF THE ANSWER IS MISSING** (e.g., marked as an Exhibit, is a blank field, or is not addressed):
+                    * **ACTION:** you must inform the user that the requested information is not provided in the contract **STOP GENERATION.**
+
+                ---
+
+                ### **ENFORCEMENT AND FORMATTING:**
+
+                * **RULE VIOLATION:** You **MUST NOT** combine the factual answer with the negative constraint phrase.
+                * **ASCII COMPLIANCE:** The output must use **strictly standard ASCII characters**. (e.g., use ' instead of ’; use " instead of “ ”).
+            """
         )
     },
     # 2. User Role: Uses the placeholders
@@ -166,7 +188,7 @@ def generate_with_streamer(messages, device, tokenizer, model, streamer, event):
         model.generate(
             input_ids,
             attention_mask=attention_mask,
-            max_new_tokens=512,
+            max_new_tokens=MODEL_MAX_LENGTH,
             temperature=0.65,
             top_p=0.9,
             do_sample=True,
@@ -180,6 +202,15 @@ def generate_with_streamer(messages, device, tokenizer, model, streamer, event):
         sys.stderr.write(f"!!! GENERATION FAILED !!!\nError in generate_with_streamer: {e}\n")
         sys.stderr.write(traceback.format_exc())
         sys.stderr.flush()
+
+def clean_to_ascii(text: str):
+    ascii_text = unidecode.unidecode(text)
+    
+    filtered_text = "".join(
+        char for char in ascii_text if 32 <= ord(char) <= 126 or char in ('\n', '\t', '\r')
+    )
+    
+    return filtered_text
 
 def run_rag_ai(query, session_id, user_id):
     """
@@ -228,7 +259,7 @@ def run_rag_ai(query, session_id, user_id):
 
         located_docs = vectorstore.as_retriever(
             search_type="similarity_score_threshold",
-            search_kwargs={"score_threshold": 0.4, "k": 5},
+            search_kwargs={"score_threshold": 0.32, "k": 5},
         ).invoke(query)
         
         has_relevant_document = len(located_docs) > 0
@@ -265,7 +296,7 @@ def run_rag_ai(query, session_id, user_id):
         
         for chunk in streamer: 
             # Write only the chunk data, as the prefix is already written
-            sys.stdout.write(f"{user_id}--{session_id}::{chunk}")
+            sys.stdout.write(f"{user_id}--{session_id}::{clean_to_ascii(chunk)}")
             sys.stdout.flush()
             
         thread.join()
