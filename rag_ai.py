@@ -136,7 +136,6 @@ def load_llm_resources(model_name):
             
             LLM_MODEL = get_peft_model(LLM_MODEL, lora_config)
             
-            # Ensure the use_cache fix is applied to the config 
             if getattr(LLM_MODEL.config, "use_cache", False):
                 LLM_MODEL.config.use_cache = False
             
@@ -154,7 +153,6 @@ def load_llm_resources(model_name):
         sys.stderr.write(f"CRITICAL ERROR::Model Loading Failed: {e}\n")
         sys.stderr.write(traceback.format_exc())
         sys.stderr.flush()
-        # Set to None if failure occurs
         LLM_MODEL = None
         LLM_TOKENIZER = None
 
@@ -289,7 +287,6 @@ def run_rag_ai(query, session_id, user_id):
         generation_started_event.wait() 
         
         for chunk in streamer: 
-            # Write only the chunk data, as the prefix is already written
             sys.stdout.write(f"{user_id}--{session_id}::{clean_to_ascii(chunk)}")
             sys.stdout.flush()
             
