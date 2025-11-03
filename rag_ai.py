@@ -111,12 +111,12 @@ def load_llm_resources(model_name):
             
             LLM_TOKENIZER = AutoTokenizer.from_pretrained(model_name)
             
-            # CRITICAL FIX RE-APPLIED: Use device_map="auto" to enable memory offloading.
-            # This is essential for 6GB VRAM cards with large models like Phi-3-128k.
+            # This is essential for 6GB VRAM cards with models like Phi-3-mini-128k-instruct.
+            # Though this is a small model, this is still quite large for a 6GB V-RAM card.
             LLM_MODEL = AutoModelForCausalLM.from_pretrained(
                 model_name,
                 torch_dtype=compute_dtype,
-                device_map={'': 0}, # <-- FIX: Use 'auto' instead of explicit 'cuda:X'
+                device_map={'': 0},
                 quantization_config=bnb_config,
                 low_cpu_mem_usage=True, 
                 trust_remote_code=False,
@@ -174,14 +174,12 @@ def generate_with_streamer(messages, device, tokenizer, model, streamer, event):
             return_tensors="pt"
         )
         
-        # Inputs must be moved to the model's primary device(s)
         input_ids = inputs.input_ids.to(model.device) 
         attention_mask = inputs.attention_mask.to(model.device)
 
         event.set()
 
         stop_token_ids = tokenizer.encode(STOP_PHRASE, return_tensors='pt')[0]
-        # Ensure custom stop criteria tokens are on the correct device
         custom_stop = StopAfterPhraseCriteria(stop_token_ids.to(model.device))
         stopping_criteria = StoppingCriteriaList([custom_stop])
         
@@ -225,9 +223,6 @@ def run_rag_ai(query, session_id, user_id):
         return
     
     try:
-        # NOTE: RAG components (loaders, splitter, embeddings, vectorstore) 
-        # are currently loaded/initialized on every call, which will still add latency.
-        
         file_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(file_dir, "SampleContract-Shuttle.pdf")
         loader = PyPDFLoader(file_path)
@@ -241,7 +236,6 @@ def run_rag_ai(query, session_id, user_id):
         split_documents = text_splitter.split_documents(documents)
         
         cuda_is_available = torch.cuda.is_available()
-        # Device is now determined globally upon startup: LLM_DEVICE
         
         embeddings = HuggingFaceEmbeddings(
             model_name="all-MiniLM-L6-v2", 
