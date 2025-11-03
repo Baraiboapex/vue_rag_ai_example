@@ -26,23 +26,6 @@ logging.basicConfig(level=logging.WARNING)
 
 import torch
 
-class StopAfterPhraseCriteria(StoppingCriteria):
-    """
-    Custom stopping criterion to terminate generation once the STOP_PHRASE
-    has been generated.
-    """
-    def __init__(self, stop_token_ids: torch.LongTensor):
-        self.stop_token_ids = stop_token_ids
-        self.len = len(stop_token_ids)
-
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        if input_ids.shape[-1] >= self.len:
-            last_tokens = input_ids[0, -self.len:]
-            if torch.equal(last_tokens, self.stop_token_ids):
-                return True 
-        return False
-
-STOP_PHRASE = "I'm sorry, I don't have an answer for that."
 MODEL_MAX_LENGTH = 768 
 DEFAULT_K_DOCUMENTS = 3
 CHATML_TEMPLATE = [
@@ -68,7 +51,7 @@ CHATML_TEMPLATE = [
                     * **ACTION:** Provide **ONLY the factual answer.** **STOP GENERATION.**
 
                 **B. IF THE ANSWER IS MISSING** (e.g., marked as an Exhibit, is a blank field, or is not addressed):
-                    * **ACTION:** you must inform the user that the requested information is not provided in the contract **STOP GENERATION.**
+                    * **ACTION:** you **MUST inform the user that the requested information is not provided in the contract** breifly and concisely without a long-winded answer. **STOP GENERATION.**
 
                 ---
 
@@ -177,10 +160,6 @@ def generate_with_streamer(messages, device, tokenizer, model, streamer, event):
 
         event.set()
 
-        stop_token_ids = tokenizer.encode(STOP_PHRASE, return_tensors='pt')[0]
-        custom_stop = StopAfterPhraseCriteria(stop_token_ids.to(model.device))
-        stopping_criteria = StoppingCriteriaList([custom_stop])
-        
         model.generate(
             input_ids,
             attention_mask=attention_mask,
@@ -191,7 +170,6 @@ def generate_with_streamer(messages, device, tokenizer, model, streamer, event):
             streamer=streamer,
             eos_token_id=tokenizer.eos_token_id, 
             pad_token_id=tokenizer.pad_token_id,
-            stopping_criteria=stopping_criteria,
             repetition_penalty=1.1
         )
     except Exception as e:

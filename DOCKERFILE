@@ -1,43 +1,39 @@
-
 FROM ubuntu:22.04 AS python_build
 
 # Stage 1: Build the Python environment
 # Use a Node.js base image that has build tools for both languages
 FROM node:18-bullseye-slim AS build
 
+# Start from the Miniconda base image
+FROM continuumio/miniconda3
+
+# Set the anaconda working directory
+WORKDIR /app/conda_scripts
+
+#Run all of the anaconda installs
+RUN conda create --name rag_env python=3.12 -y && \
+    conda activate rag_env&& \
+    conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia -y&& \
+    conda install -c conda-forge faiss-gpu
+
 # Set the working directory for the Python script
 WORKDIR /app/python_scripts
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    curl wget build-essential zlib1g-dev libncurses5-dev libgdbm-dev \
-    libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev \
-    libbz2-dev liblzma-dev uuid-dev libdb-dev libexpat1-dev \
-    libmpdec-dev libgmp-dev libxext-dev libxrender-dev libx11-dev \
-    libgl1-mesa-dev libglx-dev libegl1-mesa-dev libtiff-dev \
-    libjpeg-dev libopenjp2-7-dev libwebp-dev libharfbuzz-dev \
-    libfribidi-dev libxcb1-dev && \
-    wget https://www.python.org/ftp/python/3.12.2/Python-3.12.2.tgz && \
-    tar -xf Python-3.12.2.tgz && \
-    cd Python-3.12.2 && \
-    ./configure --enable-optimizations && \
-    make -j$(nproc) && \
-    make altinstall
+# Run all of the pip installs
+RUN pip install transformers && \
+    pip install accelerate && \
+    pip install langchain langchain_community && \
+    pip install pypdf && \
+    pip install peft && \
+    pip install bitsandbytes>=0.43.0 --prefer-binary && \
+    pip install sentence-transformers
 
-# Set Python 3.12 as default
-RUN ln -sf /usr/local/bin/python3.12 /usr/bin/python3 && \
-    python3 -m ensurepip && \
-    python3 -m pip install --upgrade pip setuptools wheel
+# Make the new environment the default when the container starts
+# This adds the necessary activation steps to the shell login
+RUN echo "conda activate rag_env" > /etc/profile.d/conda_activate.sh
 
-RUN /usr/local/bin/python3.12 -m ensurepip && \
-    /usr/local/bin/python3.12 -m pip install --upgrade pip setuptools wheel
-
-COPY requirements.txt .
-RUN /usr/local/bin/python3.12 -m pip install --no-cache-dir -r requirements.txt
-
-WORKDIR /app/python_scripts
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install any non-conda packages with pip (if necessary)
+# RUN /opt/conda/envs/my_env/bin/pip install my-pip-package
 
 # Stage 2: Build the Node.js application
 FROM node:18-bullseye-slim AS final
