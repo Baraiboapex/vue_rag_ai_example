@@ -26,6 +26,7 @@ logging.basicConfig(level=logging.WARNING)
 
 import torch
 
+STOP_PHRASE = "I'm sorry, I do not have an answer for that."
 MODEL_MAX_LENGTH = 768 
 DEFAULT_K_DOCUMENTS = 3
 CHATML_TEMPLATE = [
