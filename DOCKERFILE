@@ -1,57 +1,61 @@
-FROM ubuntu:22.04 AS python_build
+# =================================================================
+# STAGE 1: Node.js Builder (To get the clean node_modules)
+# =================================================================
+FROM node:lts-bookworm-slim AS node_build
 
-# Stage 1: Build the Python environment
-# Use a Node.js base image that has build tools for both languages
-FROM node:18-bullseye-slim AS build
-
-# Start from the Miniconda base image
-FROM continuumio/miniconda3
-
-# Set the anaconda working directory
-WORKDIR /app/conda_scripts
-
-#Run all of the anaconda installs
-RUN conda create --name rag_env python=3.12 -y && \
-    conda activate rag_env&& \
-    conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia -y&& \
-    conda install -c conda-forge faiss-gpu
-
-# Set the working directory for the Python script
-WORKDIR /app/python_scripts
-
-# Run all of the pip installs
-RUN pip install transformers && \
-    pip install accelerate && \
-    pip install langchain langchain_community && \
-    pip install pypdf && \
-    pip install peft && \
-    pip install bitsandbytes>=0.43.0 --prefer-binary && \
-    pip install sentence-transformers
-
-# Make the new environment the default when the container starts
-# This adds the necessary activation steps to the shell login
-RUN echo "conda activate rag_env" > /etc/profile.d/conda_activate.sh
-
-# Install any non-conda packages with pip (if necessary)
-# RUN /opt/conda/envs/my_env/bin/pip install my-pip-package
-
-# Stage 2: Build the Node.js application
-FROM node:18-bullseye-slim AS final
-
-# Set the working directory for the Node.js app
 WORKDIR /app
 
-# Copy the Node.js files
+# Copy and install Node dependencies
 COPY package.json package-lock.json ./
 RUN npm install --production
 
-# Copy the Node.js API and the Python scripts from the build stage
-COPY . .
-COPY --from=build /app/python_scripts /app/python_scripts
-RUN find /app/python_scripts -type l ! -exec test -e {} \; -print
+# =================================================================
+# STAGE 2: Python/Conda Builder (To create the Python environment)
+# =================================================================
+FROM continuumio/miniconda3 AS python_build
 
-# Expose the port your Node.js API listens on
+WORKDIR /app/conda_scripts
+
+# 1. Create a Conda Environment with the specific dependencies
+# FIX: Use 'bash -c' to ensure 'source' is available and the commands run sequentially
+RUN /bin/bash -c "source /opt/conda/etc/profile.d/conda.sh && \
+    conda create -n rag_env python=3.12 -y && \
+    conda activate rag_env && \
+    conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia -y && \
+    conda install -c conda-forge faiss-gpu -y"
+
+# 2. Install Pip dependencies into the Conda environment
+WORKDIR /app/python_scripts
+RUN /opt/conda/envs/rag_env/bin/pip install \
+    transformers \
+    accelerate \
+    langchain langchain_community \
+    pypdf \
+    peft \
+    bitsandbytes>=0.43.0 --prefer-binary \
+    sentence-transformers
+
+# =================================================================
+# STAGE 3: Final Runtime Image (Conda base + Node.js)
+# =================================================================
+# Use the Python environment stage as the final base
+FROM python_build
+
+# Copy the Node.js runtime files from the Node build stage
+WORKDIR /app
+COPY --from=node_build /app/node_modules ./node_modules
+
+# Copy all the application files (Python scripts and Node API)
+COPY . .
+
+# Copy the required Node binary and libraries from the original base image
+# This is a critical step to ensure Node can run on the Conda base
+COPY --from=node:lts-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:lts-bookworm-slim /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+
+# Expose the port
 EXPOSE 3000
 
-# Command to run the Node.js API
-CMD ["node", "index.js"]
+# Set a command to activate the Conda environment, then run the Node app
+# The 'bash -c' structure is necessary for environment activation
+CMD ["bash", "-c", "source /opt/conda/etc/profile.d/conda.sh && conda activate rag_env && node index.js"]

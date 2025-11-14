@@ -1,0 +1,21 @@
+app = 'vue-rag-ai-example'
+primary_region = 'ord'
+
+[build]
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[vm]]
+  cpus = 2
+  cpu_kind = 'performance'
+  # Set memory to 16GB (16384 MiB)
+  memory = 16384 
+  gpu_kind="a10"
+  # You are requesting 2 GPUs; ensure you are OK with the corresponding cost.
+  gpus=2
