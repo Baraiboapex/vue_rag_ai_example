@@ -291,48 +291,52 @@ def clean_memory_states():
 
 
 def main():
-    """
-    Initializes the model once and then enters a persistent loop
-    to handle queries via standard input (stdin).
-    """
-    # Load the model and tokenizer ONCE before the loop starts
-    load_llm_resources(model_name="microsoft/Phi-3-mini-128k-instruct") 
-    
-    # Start the continuous query processing loop
-    while True:
+    try:
+
+        """
+        Initializes the model once and then enters a persistent loop
+        to handle queries via standard input (stdin).
+        """
+        # Load the model and tokenizer ONCE before the loop starts
+        load_llm_resources(model_name="microsoft/Phi-3-mini-128k-instruct") 
         
-        try:
-            string_to_use = sys.stdin.readline()
+        # Start the continuous query processing loop
+        while True:
             
-            # Exit loop if standard input pipe is closed
-            if not string_to_use:
-                break
+            try:
+                string_to_use = sys.stdin.readline()
                 
-            query_string = string_to_use.strip()
-            
-            # Parsing logic for query, user_id, and session_id
-            # Assuming format is: user_id--session_id::query
-            
-            match = re.search(r"(.*)\-\-(.*)::(.*)", query_string)
-            if not match:
-                sys.stderr.write(f"ERROR::Input format incorrect: {query_string}\n")
-                continue
+                # Exit loop if standard input pipe is closed
+                if not string_to_use:
+                    break
+                    
+                query_string = string_to_use.strip()
                 
-            user_id, session_id, query = match.groups()
-            
-            if len(query) > 0:
-                run_rag_ai(query, session_id, user_id)
+                # Parsing logic for query, user_id, and session_id
+                # Assuming format is: user_id--session_id::query
                 
-            cleanup_thread = threading.Thread(target=clean_memory_states)
-            cleanup_thread.daemon = True 
-            cleanup_thread.start()
-            
-        except RuntimeError as err:
-            sys.stderr.write(f"{user_id}--{session_id}::{err}\n")
-            sys.stderr.flush()
-        except Exception as e:
-            sys.stderr.write(f"{user_id}--{session_id}::{e}\n")
-            sys.stderr.flush()
+                match = re.search(r"(.*)\-\-(.*)::(.*)", query_string)
+                if not match:
+                    sys.stderr.write(f"ERROR::Input format incorrect: {query_string}\n")
+                    continue
+                    
+                user_id, session_id, query = match.groups()
+                
+                if len(query) > 0:
+                    run_rag_ai(query, session_id, user_id)
+                    
+                cleanup_thread = threading.Thread(target=clean_memory_states)
+                cleanup_thread.daemon = True 
+                cleanup_thread.start()
+                
+            except RuntimeError as err:
+                sys.stderr.write(f"{user_id}--{session_id}::{err}\n")
+                sys.stderr.flush()
+            except Exception as e:
+                sys.stderr.write(f"{user_id}--{session_id}::{e}\n")
+                sys.stderr.flush()
+    except Exception as exception:
+        sys.stderr.write("Somthing went wrong : ", exception)
 
 
 if __name__ == "__main__":
