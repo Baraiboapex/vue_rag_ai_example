@@ -1,0 +1,40 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: contract-rag-ai-example
+spec:
+  template:
+    metadata:
+      annotations:
+        # EXISTING ANNOTATIONS
+        run.googleapis.com/launch-stage: BETA
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/container-concurrency: "1"
+        
+        # --- NEW ANNOTATIONS FOR GPU ---
+        # 1. Specify the GPU limit (1 GPU in this case)
+        run.googleapis.com/gpu-limits: "1"
+        # 2. Specify the GPU type (recommended for T4 for cost efficiency)
+        run.googleapis.com/gpu-type: nvidia-tesla-t4
+    
+    spec:
+      serviceAccountName: ai-engineer-service-account@contract-rag-ai-example.iam.gserviceaccount.com
+      
+      # --- IMPORTANT: Memory and CPU Adjustments ---
+      # GPU deployments require at least 4 CPU and 16 GiB of memory. 
+      # Your existing limits are compatible with this requirement.
+      containers:
+        - image: us-central1-docker.pkg.dev/contract-rag-ai-example/repository-name/node-ai-image:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: CONDA_ENV_NAME
+              value: rag_env
+            - name: NODE_API_PORT
+              value: "3000"
+          resources:
+            limits:
+              cpu: "4"         # Must be >= 4 for a T4 GPU
+              memory: "16Gi"   # Must be >= 16Gi for a T4 GPU
+              
+      timeoutSeconds: 900

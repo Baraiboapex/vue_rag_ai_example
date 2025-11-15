@@ -59,3 +59,22 @@ can be solved by using the code from your github repository.
 7.) A rag AI for multiple documents, or something.
 
 8.) A text reader AI that can be configured to look for specific tokens defined in a document.
+------------------------------------------
+
+Debug containers locally commands:
+----------------------------------------
+#build and run
+docker build -t contract-rag-ai-service:v1 .
+docker run --gpus all -d -p 8080:3000 --name contract-rag-ai contract-rag-ai-service:v1
+
+#execute the container's os instance to run the python code directly if need be
+docker exec -it contract-rag-ai /bin/bash
+conda activate rag_env
+python rag_ai.py
+
+#show real-time docker logs:
+docker logs -f contract-rag-app-new
+
+Time Management Lessons:
+-------------------------------------------------------
+1.) From now on say some time next week or the week after depending on schedule.
